@@ -18,11 +18,7 @@ class BD:
         self.cursor = None
         self.abrir_conexion()
         self.cursor = self.conn.cursor()
-        self.borrar_canciones()
-        self.borrar_listado()
-        self.crear_tabla_cancion()
         self.crear_tabla_playlist()
-        self.crear_tabla_current_pl()
         self.url_server = "http://localhost:8080/mp3"
 
     def abrir_conexion(self):
@@ -39,79 +35,67 @@ class BD:
             self.cursor.execute(query,par)
         self.hacer_commit()
 
-
-    def crear_tabla_cancion(self):
+    def crear_tabla_playlist(self):
         query = '''
-            CREATE TABLE IF NOT EXISTS cancion (
+            CREATE TABLE IF NOT EXISTS playlist (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                plain_url TEXT,
+                video_id TEXT,
                 nombre TEXT,
                 artista TEXT
             )
         '''
         self.ejecutar_query(query)
 
-
-    def crear_tabla_playlist(self):
-        query = '''
-            CREATE TABLE IF NOT EXISTS playlist (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                url TEXT
-            )
-        '''
-        self.ejecutar_query(query)
-
-    def crear_tabla_current_pl(self):
-        query = '''
-            CREATE TABLE IF NOT EXISTS current_pl (
-                pl TEXT
-            )
-        '''
-        self.ejecutar_query(query)
-
     def insert_url(self, url:str):
-        query = 'INSERT INTO playlist (url) VALUES (?)'
+        query = 'INSERT INTO playlist (plain_url) VALUES (?)'
         values = (url,)
         self.ejecutar_query(query,values)
 
-    def insert_cancion(self,nom:str, art:str):
-        query = 'INSERT INTO cancion (nombre, artista) VALUES (?,?)'
-        values = (nom, art)
-        self.ejecutar_query(query,values)
+    def update_cancion_info(self, plain_url: str, video_id: str, nom: str, art: str):
+        query = '''
+            UPDATE playlist
+            SET video_id = ?, nombre = ?, artista = ?
+            WHERE plain_url = ?
+        '''
+        values = (video_id, nom, art, plain_url)
+        self.ejecutar_query(query, values)
 
-    def insert_current_pl(self, pl):
-        query = 'INSERT INTO current_pl (pl) VALUES (?)'
-        values = (pl,)
-        self.ejecutar_query(query,values)
 
     def generar_urls(self,playlist):
         playlist_urls : list = Playlist(playlist)
         for url in playlist_urls:
-            self.insert_url(url)
+            existe = self.buscar_si_url_existe(url)
 
+            print(f'Existe de Generar_url: {existe}')
 
-    def selecionar_current_pl(self):
-        query = 'SELECT pl FROM current_pl'
-        self.ejecutar_query(query)
-        pl = self.cursor.fetchone()
-        return pl[0] if pl else None
+            if (existe == None):
+                self.insert_url(url)
+
+    def buscar_si_url_existe(self, plain_url):
+        query = 'SELECT id FROM playlist WHERE plain_url = ?'
+        self.ejecutar_query(query, (plain_url,))
+        video = self.cursor.fetchone()
+        return video[0] if video else None
     
-    def selecionar_cancion(self,id):
-        query = f'SELECT nombre, artista FROM cancion WHERE id = {id}'
-        self.ejecutar_query(query)
+    def buscar_si_datos_guardados(self, plain_url):
+        query = f'SELECT video_id FROM playlist WHERE plain_url = ?'
+        self.ejecutar_query(query, (plain_url,))
+        video_id = self.cursor.fetchone()
+        return video_id[0] if video_id else None
+
+    
+    def buscar_info_cancion(self, video_id):
+        query = f'SELECT nombre, artista FROM playlist WHERE video_id = ?'
+        self.ejecutar_query(query, (video_id,))
         cancion = self.cursor.fetchall()
         return cancion[0]
     
-    def seleccionar_id_cancion(self, nom, art):
-        query = 'SELECT id FROM cancion WHERE nombre = ? AND artista = ?'
-        self.ejecutar_query(query, (nom, art))
-        id_can = self.cursor.fetchone()
-        return id_can[0] if id_can else None
-    
     def seleccionar_url(self,id):
-        query = f'SELECT url FROM playlist WHERE id = {id}'
-        self.ejecutar_query(query)
-        url = self.cursor.fetchall()
-        return url[0][0]
+        query = f'SELECT plain_url FROM playlist WHERE id = ?'
+        self.ejecutar_query(query, (id,))
+        plain_url = self.cursor.fetchall()
+        return plain_url[0][0]
     
     def total_url_playlist(self):
         query = 'SELECT COUNT(*) FROM playlist'
@@ -123,35 +107,30 @@ class BD:
         query = 'DROP TABLE IF EXISTS playlist'
         self.ejecutar_query(query)
 
-    def borrar_canciones(self):
-        query = 'DROP TABLE IF EXISTS cancion'
-        self.ejecutar_query(query)
-        if os.path.exists("canciones"):
-            shutil.rmtree("canciones")
 
-
-    def borrar_current_pl(self):
-        query = 'DELETE FROM current_pl'
-        self.ejecutar_query(query)
-
-
-    def descargar_audio(self,url:str):
+    def descargar_audio(self,plain_url:str):
         try:
-            yt = YouTube(url)
-
+            yt = YouTube(plain_url)
             #Descargar solo Audio
             video = yt.streams.filter(only_audio=True).first()
             art = yt.author
             nom = video.title
-            self.insert_cancion(nom,art)
-            id_can = self.seleccionar_id_cancion(nom, art)
+            video_id = yt.video_id
+
+            existe = self.buscar_si_datos_guardados(plain_url)
+
+            print(f'Existe de Descargar_audio {existe}')
+
+            if (existe == None):
+                self.update_cancion_info(plain_url, video_id, nom, art)
             destination = "canciones"
 
             # download the file
             out_file = video.download(output_path=destination)
-            new_file = "canciones" + '\\' + str(id_can) + '.mp3'
+            new_file = "canciones" + '\\' + str(video_id) + '.mp3'
             ruta = Path(out_file)
             ruta.rename(new_file)
+
         except Exception as e:
             print(f"Error al descargar el audio: {e}")
             traceback.print_exc()
@@ -160,23 +139,18 @@ class BD:
         if os.path.exists("canciones"):
             shutil.rmtree("canciones")
 
-
         path = os.path.join(os.getcwd(), "canciones")
         os.mkdir(path)
 
         self.generar_urls(pl)
-        self.borrar_current_pl()
-        self.insert_current_pl(pl)
         total = self.total_url_playlist()
 
-
-        
         random_indices = random.sample(range(1, total + 1), cant)
         random_indices.sort()
 
         for index in random_indices:
-            url = self.seleccionar_url(index)
-            self.descargar_audio(url)
+            plain_url = self.seleccionar_url(index)
+            self.descargar_audio(plain_url)
         
         self.vaciar_tabla_server()
         self.subir_a_server()
@@ -196,13 +170,13 @@ class BD:
         for file_name in files:
             # Construir la ruta completa al archivo
             file_path = os.path.join(source_folder, file_name)
-            num = file_name.replace(".mp3", "")
-            titulo, artista = self.selecionar_cancion(num)
+            video_id = file_name.replace(".mp3", "")
+            titulo, artista = self.buscar_info_cancion(video_id)
             mp3_file = open(file_path, "rb")
 
             # Crear el JSON con la información de la canción
             song_data = {
-                "id" : num,
+                "id" : video_id,
                 "title": titulo,
                 "artist": artista,
             }
@@ -221,10 +195,9 @@ class BD:
 
             # Cerrar el archivo MP3
             mp3_file.close()
-    
-        self.borrar_canciones()
+
 
 if __name__ == "__main__":
 
     bd = BD()
-    bd.hacer_todo_el_insert('https://www.youtube.com/playlist?list=PLyHdxlKXBjjlYLNeEm5_WYAIYPsEw-RBG', 5)
+    bd.hacer_todo_el_insert('https://www.youtube.com/playlist?list=PLyHdxlKXBjjlYLNeEm5_WYAIYPsEw-RBG', 2)
